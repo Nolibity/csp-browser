@@ -1,0 +1,408 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-theme="light">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>CSP Browser - 聊天</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<div class="chat-container">
+  <div class="chat-header">
+    <button class="btn btn-ghost" onclick="confirmLeave()">← 返回</button>
+    <img class="chat-header-avatar" id="headerAvatar" src="" alt=""
+         onerror="this.style.display='none'">
+    <div class="chat-header-info">
+      <div class="chat-header-name" id="headerName"></div>
+      <div class="chat-header-work" id="headerWork"></div>
+    </div>
+    <button class="btn btn-ghost btn-icon" onclick="deleteCurrentChat()" title="删除当前对话">🗑</button>
+    <button class="btn btn-ghost btn-icon" onclick="openSettings()" title="设置">⚙</button>
+    <button class="btn btn-ghost btn-icon" onclick="toggleTheme()" title="切换主题">🌓</button>
+  </div>
+
+  <div class="chat-body">
+    <aside class="chat-sidebar" id="chatSidebar">
+      <button class="btn btn-primary sidebar-new-btn" onclick="newConversation()">+ 新对话</button>
+      <div class="sidebar-history" id="sidebarHistory"></div>
+    </aside>
+
+    <div class="chat-main">
+      <div class="chat-messages" id="chatMessages"></div>
+
+      <div class="chat-input-area">
+        <input type="text" class="chat-input" id="chatInput"
+               placeholder="输入消息..." autofocus
+               onkeydown="if(event.key==='Enter')sendMessage()">
+        <button class="btn btn-primary" id="sendBtn" onclick="sendMessage()">发送</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script src="app.js"></script>
+<script>
+const slug = new URLSearchParams(location.search).get('character');
+if (!slug) location.href = '/index.html';
+
+let conversations = [];
+let currentConvId = null;
+let messages = [];
+let sending = false;
+let character = null;
+let accentColor = '#b0a0c8';
+
+async function init() {
+  try {
+    const data = await api(`/api/characters`);
+    character = data.find(c => c.slug === slug);
+    if (!character) { alert('角色不存在'); location.href = '/index.html'; return; }
+  } catch {
+    alert('加载角色失败'); location.href = '/index.html'; return;
+  }
+
+  accentColor = getColor(slug);
+  document.getElementById('headerName').textContent = character.name;
+  document.getElementById('headerWork').textContent = character.work;
+  document.querySelector('.chat-header').style.setProperty('--card-accent', accentColor);
+  if (character.hasAvatar) {
+    document.getElementById('headerAvatar').src = avatarUrl(slug, true);
+  }
+
+  conversations = loadConversations(slug);
+
+  // Determine which conversation to load
+  const urlConvId = new URLSearchParams(location.search).get('conv');
+  if (urlConvId && getConversation(slug, urlConvId)) {
+    currentConvId = urlConvId;
+  } else {
+    // Always start a fresh conversation
+    const conv = createConversation(slug);
+    const greeting = { role: 'assistant', content: getGreeting(slug, character.name), timestamp: Date.now() };
+    conv.messages.push(greeting);
+    conversations.push(conv);
+    saveConversations(slug, conversations);
+    currentConvId = conv.id;
+  }
+
+  loadCurrentMessages();
+  renderSidebar();
+  renderMessages();
+}
+
+function loadCurrentMessages() {
+  const conv = getConversation(slug, currentConvId);
+  messages = conv ? conv.messages : [];
+}
+
+function switchConversation(convId) {
+  if (convId === currentConvId) return;
+  currentConvId = convId;
+  loadCurrentMessages();
+  renderSidebar();
+  renderMessages();
+  document.getElementById('chatInput').focus();
+}
+
+function newConversation() {
+  const conv = createConversation(slug);
+  const greeting = { role: 'assistant', content: getGreeting(slug, character.name), timestamp: Date.now() };
+  conv.messages.push(greeting);
+  conversations.push(conv);
+  saveConversations(slug, conversations);
+  currentConvId = conv.id;
+  loadCurrentMessages();
+  renderSidebar();
+  renderMessages();
+  document.getElementById('chatInput').focus();
+}
+
+function renderSidebar() {
+  const container = document.getElementById('sidebarHistory');
+  // Sort newest first
+  const sorted = [...conversations].reverse();
+
+  container.innerHTML = sorted.map(c => {
+    const activeClass = c.id === currentConvId ? ' active' : '';
+    const firstUserMsg = c.messages.find(m => m.role === 'user');
+    const preview = c.title || (firstUserMsg ? firstUserMsg.content.slice(0, 30) : '新对话');
+    return `
+<div class="history-entry${activeClass}" data-id="${c.id}"
+     onclick="onHistoryClick('${c.id}')"
+     oncontextmenu="onHistoryContext(event, '${c.id}')">
+  <div class="history-date">${formatDateFull(c.createdAt)}</div>
+  <div class="history-preview">${escapeHtmlContent(preview)}</div>
+</div>`;
+  }).join('');
+}
+
+function onHistoryClick(convId) {
+  if (convId === currentConvId) return;
+  document.getElementById('continueConvId').value = convId;
+  document.getElementById('continueModal').classList.add('visible');
+}
+
+function onHistoryContext(e, convId) {
+  e.preventDefault();
+  const menu = document.getElementById('ctxMenu');
+  menu.style.left = e.clientX + 'px';
+  menu.style.top = e.clientY + 'px';
+  menu.classList.add('visible');
+  menu.dataset.convId = convId;
+}
+
+function hideCtxMenu() {
+  document.getElementById('ctxMenu').classList.remove('visible');
+}
+
+document.addEventListener('click', (e) => {
+  if (!e.target.closest('#ctxMenu')) hideCtxMenu();
+});
+
+function confirmDeleteHistory() {
+  const convId = document.getElementById('ctxMenu').dataset.convId;
+  hideCtxMenu();
+  if (convId === currentConvId) {
+    deleteCurrentChat();
+  } else {
+    conversations = deleteConversation(slug, convId);
+    renderSidebar();
+  }
+}
+
+function confirmContinueChat() {
+  const convId = document.getElementById('continueConvId').value;
+  document.getElementById('continueModal').classList.remove('visible');
+  switchConversation(convId);
+}
+
+function cancelContinue() {
+  document.getElementById('continueModal').classList.remove('visible');
+}
+
+function deleteCurrentChat() {
+  if (conversations.length <= 1) {
+    // Clear messages but keep the conversation with a fresh greeting
+    const conv = conversations[0];
+    conv.messages = [{ role: 'assistant', content: getGreeting(slug, character.name), timestamp: Date.now() }];
+    conv.title = '';
+    saveConversations(slug, conversations);
+    loadCurrentMessages();
+    renderSidebar();
+    renderMessages();
+    return;
+  }
+  conversations = deleteConversation(slug, currentConvId);
+  currentConvId = conversations[conversations.length - 1].id;
+  loadCurrentMessages();
+  renderSidebar();
+  renderMessages();
+}
+
+function renderMessages() {
+  const container = document.getElementById('chatMessages');
+  container.innerHTML = messages.map(m => {
+    const roleClass = m.role === 'user' ? 'user' : 'character';
+    const avHtml = m.role === 'assistant'
+      ? (character.hasAvatar
+          ? `<img class="message-avatar" src="${avatarUrl(slug, true)}" onerror="this.style.display='none'" style="border-color: ${accentColor}">`
+          : '')
+      : '';
+    return `
+<div class="message ${roleClass}">
+  ${avHtml}
+  <div class="message-bubble">${escapeHtmlContent(m.content)}</div>
+</div>`;
+  }).join('');
+  container.scrollTop = container.scrollHeight;
+}
+
+async function sendMessage() {
+  if (sending) return;
+  const input = document.getElementById('chatInput');
+  const text = input.value.trim();
+  if (!text) return;
+
+  input.value = '';
+  sending = true;
+  document.getElementById('sendBtn').disabled = true;
+
+  messages.push({ role: 'user', content: text, timestamp: Date.now() });
+  flushCurrentConv();
+  renderMessages();
+  renderSidebar();
+  showTyping();
+
+  try {
+    const history = messages.slice(0, -1).filter(m => m.role !== 'system').map(m => ({
+      role: m.role === 'assistant' ? 'assistant' : 'user',
+      content: m.content
+    }));
+    const data = await api(`/api/chat/${slug}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ messages: history, message: text })
+    });
+    removeTyping();
+    messages.push({ role: 'assistant', content: data.reply, timestamp: Date.now() });
+    flushCurrentConv();
+    renderMessages();
+    renderSidebar();
+  } catch (err) {
+    removeTyping();
+    messages.push({ role: 'assistant', content: '（…）', timestamp: Date.now() });
+    flushCurrentConv();
+    renderMessages();
+    renderSidebar();
+    console.error(err);
+  }
+
+  sending = false;
+  document.getElementById('sendBtn').disabled = false;
+  document.getElementById('chatInput').focus();
+}
+
+function flushCurrentConv() {
+  updateConversation(slug, currentConvId, messages);
+  conversations = loadConversations(slug);
+}
+
+function showTyping() {
+  const container = document.getElementById('chatMessages');
+  const div = document.createElement('div');
+  div.className = 'message character';
+  div.id = 'typingIndicator';
+  div.innerHTML = '<div class="message-bubble"><div class="typing-indicator"><span></span><span></span><span></span></div></div>';
+  container.appendChild(div);
+  container.scrollTop = container.scrollHeight;
+}
+
+function removeTyping() {
+  const el = document.getElementById('typingIndicator');
+  if (el) el.remove();
+}
+
+function escapeHtmlContent(str) {
+  return str
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
+}
+
+init();
+
+function confirmLeave() {
+  document.getElementById('leaveModal').classList.add('visible');
+}
+
+function stayHere() {
+  document.getElementById('leaveModal').classList.remove('visible');
+}
+
+function leaveAndKeep() {
+  location.href = '/index.html';
+}
+
+function leaveAndClear() {
+  localStorage.removeItem(`csp-chats-${slug}`);
+  location.href = '/index.html';
+}
+
+// --- Settings ---
+async function openSettings() {
+  document.getElementById('settingsModal').classList.add('visible');
+  try {
+    const config = await api('/api/config');
+    document.getElementById('cfgApiKey').value = config.apiKey || '';
+  } catch {}
+}
+
+function closeSettings() { document.getElementById('settingsModal').classList.remove('visible'); }
+
+async function saveSettings() {
+  const apiKey = document.getElementById('cfgApiKey').value.trim();
+  try {
+    await api('/api/config', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        provider: 'custom',
+        apiKey,
+        baseUrl: 'https://api.deepseek.com/v1/chat/completions',
+        model: 'deepseek-chat'
+      })
+    });
+    closeSettings();
+    alert('设置已保存');
+  } catch (err) { alert('保存失败: ' + err.message); }
+}
+</script>
+
+<!-- Leave modal -->
+<div class="modal-overlay" id="leaveModal">
+  <div class="modal-card">
+    <div class="modal-title">离开对话</div>
+    <div class="modal-body">是否保留此角色的所有对话记录？<br>保留后下次进入可以继续对话。</div>
+    <div class="modal-actions">
+      <button class="btn btn-ghost" onclick="stayHere()">取消</button>
+      <button class="btn btn-ghost" onclick="leaveAndClear()" style="color:#c05555;border-color:#c05555;">不保留</button>
+      <button class="btn btn-primary" onclick="leaveAndKeep()">保留并离开</button>
+    </div>
+  </div>
+</div>
+
+<!-- Continue conversation modal -->
+<div class="modal-overlay" id="continueModal">
+  <div class="modal-card">
+    <div class="modal-title">继续对话</div>
+    <div class="modal-body">是否继续这段对话？</div>
+    <input type="hidden" id="continueConvId">
+    <div class="modal-actions">
+      <button class="btn btn-ghost" onclick="cancelContinue()">取消</button>
+      <button class="btn btn-primary" onclick="confirmContinueChat()">是的</button>
+    </div>
+  </div>
+</div>
+
+<!-- Context menu -->
+<div class="ctx-menu" id="ctxMenu">
+  <div class="ctx-menu-item danger" onclick="confirmDeleteHistory()">删除此对话</div>
+</div>
+
+<!-- Settings modal -->
+<div class="modal-overlay" id="settingsModal">
+  <div class="modal-card" style="max-width:480px;max-height:80vh;overflow-y:auto;">
+    <div class="modal-title">设置</div>
+    <div class="modal-body" style="text-align:left;">
+      <div class="settings-section">
+        <h4>关于 CSP Browser</h4>
+        <p>CSP Browser 是一个二次元角色对话平台。它使用 CSP (Character Skill Producer) 技术将角色蒸馏为可执行的行为 Skill，让 AI 以角色的身份、语气和行为模式与你对话。</p>
+        <p>你可以浏览预设角色、创建新角色，并与任何角色进行自然对话。每个角色有独立的对话历史，随时可以继续之前的聊天。</p>
+      </div>
+      <div class="settings-section">
+        <h4>配置 DeepSeek API</h4>
+        <p>角色对话由 <strong>DeepSeek</strong> 大模型驱动，需要配置 API Key 才能使用。</p>
+        <ol>
+          <li>打开 <a href="https://platform.deepseek.com" target="_blank">platform.deepseek.com</a> 注册或登录</li>
+          <li>进入「API Keys」页面，点击「创建 API Key」</li>
+          <li>复制生成的 Key（以 <code>sk-</code> 开头）</li>
+          <li>粘贴到下方输入框，点击保存</li>
+          <li>DeepSeek 新用户通常有免费额度，之后按量计费，价格低廉</li>
+        </ol>
+      </div>
+      <div class="form-group">
+        <label class="form-label">API Key</label>
+        <input type="password" class="form-input" id="cfgApiKey" placeholder="sk-...">
+      </div>
+    </div>
+    <div class="modal-actions">
+      <button class="btn btn-ghost" onclick="closeSettings()">取消</button>
+      <button class="btn btn-primary" onclick="saveSettings()">保存</button>
+    </div>
+  </div>
+</div>
+
+</body>
+</html>

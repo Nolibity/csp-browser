@@ -1,0 +1,16 @@
+{
+  "name": "csp-browser",
+  "version": "1.0.0",
+  "type": "module",
+  "description": "Browser-based character chat platform powered by CSP character skill distillation and DeepSeek LLM",
+  "keywords": ["csp", "character", "chat", "anime", "roleplay", "skill", "deepseek"],
+  "license": "MIT",
+  "scripts": {
+    "start": "node server.js",
+    "setup": "node -e \"require('fs').existsSync('config.json') || require('fs').copyFileSync('config.example.json','config.json')\""
+  },
+  "dependencies": {
+    "express": "^4.21.0",
+    "multer": "^1.4.5-lts.1"
+  }
+}

@@ -1,0 +1,238 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-theme="light">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>CSP Browser - 创建角色</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<nav class="navbar">
+  <span class="navbar-title">CSP Browser</span>
+  <div class="navbar-actions">
+    <button class="btn-ghost btn" onclick="location.href='/index.html'">← 返回</button>
+    <button class="btn-icon" id="themeToggle" onclick="toggleTheme()" title="切换主题">🌓</button>
+    <button class="btn-icon" onclick="openSettings()" title="设置">⚙</button>
+  </div>
+</nav>
+
+<div class="create-container">
+  <div class="create-card">
+    <div class="create-title">创建新角色</div>
+    <div class="create-subtitle">输入角色名和作品名，CSP 将自动检索资料并蒸馏角色行为 Skill。</div>
+
+    <div class="form-group">
+      <label class="form-label">角色名称</label>
+      <input type="text" class="form-input" id="charName" placeholder="例如：高松灯">
+    </div>
+
+    <div class="form-group">
+      <label class="form-label">作品名称</label>
+      <input type="text" class="form-input" id="charWork" placeholder="例如：BanG Dream! It's MyGO!!!!!">
+    </div>
+
+    <div class="form-group" style="display:flex;flex-direction:column;align-items:center;">
+      <label class="form-label" style="align-self:flex-start;">角色头像</label>
+      <div class="create-avatar-wrap" id="avatarWrap" onclick="selectAvatar()">
+        <img class="create-avatar" id="avatarPreview" src="" alt="" style="display:none;">
+        <span class="create-avatar-plus" id="avatarPlus">+</span>
+      </div>
+      <span style="font-size:12px;color:var(--text-secondary);margin-top:6px;">点击上传头像（可选）</span>
+      <input type="file" id="avatarInput" accept="image/png,image/jpeg,image/webp" style="display:none;" onchange="previewAvatar(event)">
+    </div>
+
+    <button class="btn btn-primary" id="createBtn" onclick="createCharacter()" style="width:100%;justify-content:center;">
+      开始蒸馏
+    </button>
+
+    <div class="progress-area" id="progressArea"></div>
+  </div>
+</div>
+
+<script src="app.js"></script>
+<script>
+let creating = false;
+let avatarFile = null;
+
+function selectAvatar() {
+  document.getElementById('avatarInput').click();
+}
+
+function previewAvatar(event) {
+  const file = event.target.files[0];
+  if (!file) return;
+
+  avatarFile = file;
+  const preview = document.getElementById('avatarPreview');
+  const plus = document.getElementById('avatarPlus');
+  preview.src = URL.createObjectURL(file);
+  preview.style.display = 'block';
+  plus.style.display = 'none';
+}
+
+async function createCharacter() {
+  if (creating) return;
+
+  const nameInput = document.getElementById('charName');
+  const workInput = document.getElementById('charWork');
+  const character = nameInput.value.trim();
+  const work = workInput.value.trim();
+
+  if (!character || !work) {
+    alert('请填写角色名和作品名');
+    return;
+  }
+
+  creating = true;
+  const btn = document.getElementById('createBtn');
+  const area = document.getElementById('progressArea');
+
+  btn.disabled = true;
+  btn.textContent = '蒸馏中...';
+  area.classList.add('visible');
+  area.innerHTML = '';
+
+  try {
+    const resp = await fetch('/api/create', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ character, work })
+    });
+
+    const reader = resp.body.getReader();
+    const decoder = new TextDecoder();
+
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+
+      const text = decoder.decode(value, { stream: true });
+      const lines = text.split('\n');
+
+      for (const line of lines) {
+        if (!line.startsWith('data: ')) continue;
+        try {
+          const data = JSON.parse(line.slice(6));
+
+          if (data.done) {
+            area.innerHTML += '\n✅ 角色 Skill 生成完成！';
+            area.scrollTop = area.scrollHeight;
+
+            // Upload avatar if one was selected
+            if (avatarFile && data.slug) {
+              area.innerHTML += '\n📷 正在上传头像...';
+              await uploadNewAvatar(data.slug, avatarFile);
+              area.innerHTML += '\n✅ 头像上传完成！';
+              area.scrollTop = area.scrollHeight;
+            }
+
+            btn.textContent = '已完成';
+            setTimeout(() => {
+              if (confirm('角色创建完成！是否跳转到角色列表？')) {
+                location.href = '/index.html';
+              }
+            }, 500);
+            return;
+          }
+
+          if (data.error) {
+            area.innerHTML += `<span class="error-line">\n❌ ${escapeHtml(data.message)}</span>`;
+            area.scrollTop = area.scrollHeight;
+            btn.textContent = '重新蒸馏';
+            btn.disabled = false;
+            creating = false;
+            return;
+          }
+
+          if (data.text) {
+            area.innerHTML += escapeHtml(data.text);
+            area.scrollTop = area.scrollHeight;
+          }
+        } catch {}
+      }
+    }
+  } catch (err) {
+    area.innerHTML += `\n<span class="error-line">❌ 连接失败: ${escapeHtml(err.message)}</span>`;
+    btn.textContent = '重新蒸馏';
+    btn.disabled = false;
+    creating = false;
+  }
+}
+
+async function uploadNewAvatar(slug, file) {
+  const form = new FormData();
+  form.append('avatar', file);
+  await fetch(`/api/characters/${slug}/avatar`, { method: 'POST', body: form });
+}
+
+function escapeHtml(str) {
+  const div = document.createElement('div');
+  div.textContent = str;
+  return div.innerHTML;
+}
+// --- Settings ---
+async function openSettings() {
+  document.getElementById('settingsModal').classList.add('visible');
+  try {
+    const config = await api('/api/config');
+    document.getElementById('cfgApiKey').value = config.apiKey || '';
+  } catch {}
+}
+
+function closeSettings() { document.getElementById('settingsModal').classList.remove('visible'); }
+
+async function saveSettings() {
+  const apiKey = document.getElementById('cfgApiKey').value.trim();
+  try {
+    await api('/api/config', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        provider: 'custom',
+        apiKey,
+        baseUrl: 'https://api.deepseek.com/v1/chat/completions',
+        model: 'deepseek-chat'
+      })
+    });
+    closeSettings();
+    alert('设置已保存');
+  } catch (err) { alert('保存失败: ' + err.message); }
+}
+</script>
+
+<!-- Settings modal -->
+<div class="modal-overlay" id="settingsModal">
+  <div class="modal-card" style="max-width:480px;max-height:80vh;overflow-y:auto;">
+    <div class="modal-title">设置</div>
+    <div class="modal-body" style="text-align:left;">
+      <div class="settings-section">
+        <h4>关于 CSP Browser</h4>
+        <p>CSP Browser 是一个二次元角色对话平台。它使用 CSP (Character Skill Producer) 技术将角色蒸馏为可执行的行为 Skill，让 AI 以角色的身份、语气和行为模式与你对话。</p>
+        <p>你可以浏览预设角色、创建新角色，并与任何角色进行自然对话。每个角色有独立的对话历史，随时可以继续之前的聊天。</p>
+      </div>
+      <div class="settings-section">
+        <h4>配置 DeepSeek API</h4>
+        <p>角色对话由 <strong>DeepSeek</strong> 大模型驱动，需要配置 API Key 才能使用。</p>
+        <ol>
+          <li>打开 <a href="https://platform.deepseek.com" target="_blank">platform.deepseek.com</a> 注册或登录</li>
+          <li>进入「API Keys」页面，点击「创建 API Key」</li>
+          <li>复制生成的 Key（以 <code>sk-</code> 开头）</li>
+          <li>粘贴到下方输入框，点击保存</li>
+          <li>DeepSeek 新用户通常有免费额度，之后按量计费，价格低廉</li>
+        </ol>
+      </div>
+      <div class="form-group">
+        <label class="form-label">API Key</label>
+        <input type="password" class="form-input" id="cfgApiKey" placeholder="sk-...">
+      </div>
+    </div>
+    <div class="modal-actions">
+      <button class="btn btn-ghost" onclick="closeSettings()">取消</button>
+      <button class="btn btn-primary" onclick="saveSettings()">保存</button>
+    </div>
+  </div>
+</div>
+
+</body>
+</html>

@@ -1,0 +1,263 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-theme="light">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>CSP Browser - 角色</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<nav class="navbar">
+  <span class="navbar-title">CSP Browser</span>
+  <div class="navbar-actions">
+    <button class="btn-ghost btn" onclick="location.href='/create.html'">+ 创建角色</button>
+    <button class="btn-icon" id="themeToggle" onclick="toggleTheme()" title="切换主题">🌓</button>
+    <button class="btn-icon" onclick="openSettings()" title="设置">⚙</button>
+  </div>
+</nav>
+
+<div class="hero">
+  <div class="hero-title">角色</div>
+  <div class="hero-subtitle">选择一个角色，开始一段对话。每个角色都有自己独特的说话方式、行为逻辑和故事。</div>
+</div>
+
+<div class="filters" id="filters"></div>
+
+<div class="char-grid" id="charGrid"></div>
+
+<script src="app.js"></script>
+<script>
+// --- State ---
+let allCharacters = [];
+let activeFilter = 'all';
+
+// --- Render ---
+async function loadCharacters() {
+  try {
+    allCharacters = await api('/api/characters');
+  } catch {
+    allCharacters = [];
+    document.getElementById('charGrid').innerHTML =
+      '<div class="empty-state"><div class="empty-state-icon">📭</div><div class="empty-state-text">没有找到角色<br>去创建你的第一个角色吧</div></div>';
+    return;
+  }
+  renderFilters();
+  renderCards();
+}
+
+function renderFilters() {
+  const works = [...new Set(allCharacters.map(c => c.work).filter(Boolean))];
+  const container = document.getElementById('filters');
+  if (works.length <= 1) { container.innerHTML = ''; return; }
+
+  let html = `<span class="filter-tag${activeFilter === 'all' ? ' active' : ''}" data-work="all">全部</span>`;
+  works.forEach(w => {
+    html += `<span class="filter-tag${activeFilter === w ? ' active' : ''}" data-work="${escapeHtml(w)}">${escapeHtml(w)}</span>`;
+  });
+  container.innerHTML = html;
+
+  container.querySelectorAll('.filter-tag').forEach(tag => {
+    tag.addEventListener('click', () => {
+      activeFilter = tag.dataset.work;
+      renderFilters();
+      renderCards();
+    });
+  });
+}
+
+function renderCards() {
+  const filtered = activeFilter === 'all'
+    ? allCharacters
+    : allCharacters.filter(c => c.work === activeFilter);
+
+  const grid = document.getElementById('charGrid');
+
+  if (filtered.length === 0) {
+    grid.innerHTML = '<div class="empty-state"><div class="empty-state-text">这个作品下还没有角色</div></div>';
+    return;
+  }
+
+  grid.innerHTML = filtered.map(c => {
+    const color = getColor(c.slug);
+    const av = avatarUrl(c.slug, c.hasAvatar);
+    const avatarHtml = av
+      ? `<img class="char-avatar" src="${av}" alt="${escapeHtml(c.name)}">`
+      : `<div class="char-avatar-placeholder" onclick="uploadAvatar('${c.slug}')" title="点击上传头像">+</div>`;
+
+    return `
+<div class="char-card" style="--card-accent: ${color}">
+  <button class="char-delete-btn" onclick="event.stopPropagation();confirmDeleteChar('${c.slug}','${escapeHtml(c.name)}')" title="删除角色">✕</button>
+  <div class="char-avatar-wrap">
+    ${avatarHtml}
+  </div>
+  <div class="char-name">${escapeHtml(c.name)}</div>
+  <div class="char-work">${escapeHtml(c.work)}</div>
+  ${c.description ? `
+  <div class="char-quote" data-slug="${c.slug}">${escapeHtml(c.description)}</div>` : ''}
+  <button class="btn btn-primary" onclick="startChat('${c.slug}')">开始对话</button>
+</div>`;
+  }).join('');
+}
+
+function startChat(slug) {
+  location.href = `/chat.html?character=${encodeURIComponent(slug)}`;
+}
+
+function uploadAvatar(slug) {
+  const input = document.createElement('input');
+  input.type = 'file';
+  input.accept = 'image/png,image/jpeg,image/webp';
+  input.onchange = async () => {
+    const file = input.files[0];
+    if (!file) return;
+    const form = new FormData();
+    form.append('avatar', file);
+    try {
+      await fetch(`/api/characters/${slug}/avatar`, { method: 'POST', body: form });
+      loadCharacters();
+    } catch (err) {
+      alert('上传失败: ' + err.message);
+    }
+  };
+  input.click();
+}
+
+function escapeHtml(str) {
+  const div = document.createElement('div');
+  div.textContent = str;
+  return div.innerHTML;
+}
+
+// --- Settings ---
+async function openSettings() {
+  document.getElementById('settingsModal').classList.add('visible');
+  try {
+    const config = await api('/api/config');
+    document.getElementById('cfgApiKey').value = config.apiKey || '';
+  } catch {}
+}
+
+function closeSettings() {
+  document.getElementById('settingsModal').classList.remove('visible');
+}
+
+async function saveSettings() {
+  const apiKey = document.getElementById('cfgApiKey').value.trim();
+  try {
+    await api('/api/config', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        provider: 'custom',
+        apiKey,
+        baseUrl: 'https://api.deepseek.com/v1/chat/completions',
+        model: 'deepseek-chat'
+      })
+    });
+    closeSettings();
+    alert('设置已保存');
+  } catch (err) {
+    alert('保存失败: ' + err.message);
+  }
+}
+
+// Event delegation for char-quote clicks
+document.getElementById('charGrid').addEventListener('click', (e) => {
+  const quote = e.target.closest('.char-quote');
+  if (!quote) return;
+  const slug = quote.dataset.slug;
+  const char = allCharacters.find(c => c.slug === slug);
+  if (!char) return;
+  document.getElementById('descModalTitle').textContent = char.name;
+  document.getElementById('descModalBody').textContent = char.description;
+  document.getElementById('descModal').classList.add('visible');
+});
+
+function closeDescModal() {
+  document.getElementById('descModal').classList.remove('visible');
+}
+
+// --- Delete ---
+function confirmDeleteChar(slug, name) {
+  document.getElementById('deleteSlug').value = slug;
+  document.getElementById('deleteCharName').textContent = name;
+  document.getElementById('deleteModal').classList.add('visible');
+}
+
+function cancelDelete() {
+  document.getElementById('deleteModal').classList.remove('visible');
+}
+
+async function doDelete() {
+  const slug = document.getElementById('deleteSlug').value;
+  document.getElementById('deleteModal').classList.remove('visible');
+  try {
+    await api(`/api/characters/${slug}`, { method: 'DELETE' });
+    loadCharacters();
+  } catch (err) {
+    alert('删除失败: ' + err.message);
+  }
+}
+
+// --- Init ---
+loadCharacters();
+</script>
+
+<!-- Description modal -->
+<div class="modal-overlay" id="descModal">
+  <div class="modal-card" style="max-width:520px;text-align:left;position:relative;padding-top:44px;">
+    <button class="desc-modal-close" onclick="closeDescModal()">✕</button>
+    <div class="modal-title" id="descModalTitle" style="margin-bottom:14px;"></div>
+    <div class="desc-modal-content" id="descModalBody"></div>
+  </div>
+</div>
+
+<!-- Delete modal -->
+<div class="modal-overlay" id="deleteModal">
+  <div class="modal-card">
+    <div class="modal-title">删除角色</div>
+    <div class="modal-body">确定要删除角色 <strong id="deleteCharName"></strong> 吗？<br>角色会消失很久的（真的很久很久）</div>
+    <input type="hidden" id="deleteSlug">
+    <div class="modal-actions">
+      <button class="btn btn-ghost" onclick="cancelDelete()">取消</button>
+      <button class="btn btn-primary" onclick="doDelete()" style="background:#e05555;">确定</button>
+    </div>
+  </div>
+</div>
+
+<!-- Settings modal -->
+<div class="modal-overlay" id="settingsModal">
+  <div class="modal-card" style="max-width:480px;max-height:80vh;overflow-y:auto;">
+    <div class="modal-title">设置</div>
+    <div class="modal-body" style="text-align:left;">
+      <div class="settings-section">
+        <h4>关于 CSP Browser</h4>
+        <p>CSP Browser 是一个二次元角色对话平台。它使用 CSP (Character Skill Producer) 技术将角色蒸馏为可执行的行为 Skill，让 AI 以角色的身份、语气和行为模式与你对话。</p>
+        <p>你可以浏览预设角色、创建新角色，并与任何角色进行自然对话。每个角色有独立的对话历史，随时可以继续之前的聊天。</p>
+      </div>
+      <div class="settings-section">
+        <h4>配置 DeepSeek API</h4>
+        <p>角色对话由 <strong>DeepSeek</strong> 大模型驱动，需要配置 API Key 才能使用。</p>
+        <ol>
+          <li>打开 <a href="https://platform.deepseek.com" target="_blank">platform.deepseek.com</a> 注册或登录</li>
+          <li>进入「API Keys」页面，点击「创建 API Key」</li>
+          <li>复制生成的 Key（以 <code>sk-</code> 开头）</li>
+          <li>粘贴到下方输入框，点击保存</li>
+          <li>DeepSeek 新用户通常有免费额度，之后按量计费，价格低廉</li>
+        </ol>
+      </div>
+      <div class="form-group">
+        <label class="form-label">API Key</label>
+        <input type="password" class="form-input" id="cfgApiKey" placeholder="sk-...">
+      </div>
+    </div>
+    <div class="modal-actions">
+      <button class="btn btn-ghost" onclick="closeSettings()">取消</button>
+      <button class="btn btn-primary" onclick="saveSettings()">保存</button>
+    </div>
+  </div>
+</div>
+
+</body>
+</html>

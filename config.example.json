@@ -1,0 +1,6 @@
+{
+  "provider": "custom",
+  "apiKey": "sk-your-deepseek-api-key",
+  "baseUrl": "https://api.deepseek.com/v1/chat/completions",
+  "model": "deepseek-chat"
+}
