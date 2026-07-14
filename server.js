@@ -3,6 +3,7 @@ import { readFile, readdir, rename, stat, writeFile, mkdir, rm, copyFile } from 
 import { existsSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { exec } from 'node:child_process';
 import multer from 'multer';
 import { chatWithCharacter, distillCharacter } from './llm.js';
 
@@ -281,6 +282,10 @@ app.get('*', (_req, res) => {
 const PORT = process.env.PORT || 3000;
 await scanCharacters();
 app.listen(PORT, () => {
-  console.log(`CSP Browser running at http://localhost:${PORT}`);
+  const url = `http://localhost:${PORT}`;
+  console.log(`CSP Browser running at ${url}`);
   console.log(`Loaded ${characters.length} characters`);
+  // Auto-open browser
+  const cmd = process.platform === 'win32' ? `start ${url}` : process.platform === 'darwin' ? `open ${url}` : `xdg-open ${url}`;
+  exec(cmd, () => {});
 });

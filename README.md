@@ -11,14 +11,9 @@
 
 ## 快速开始
 
-```bash
-git clone <repo-url>
-cd csp-browser
-npm install
-npm start
-```
+**前提**：电脑需安装 Node.js → https://nodejs.org （下载左边 LTS 版本，安装一路 Next）
 
-打开 http://localhost:3000
+**运行**：双击 `start.bat`，首次自动安装依赖，之后每次双击即可启动，浏览器自动打开。
 
 ## 配置 API Key
 
