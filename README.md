@@ -43,3 +43,9 @@ cp config.example.json config.json
 - Vanilla HTML/CSS/JS
 - DeepSeek API (OpenAI 兼容格式)
 - CSP Skill 蒸馏
+
+## 作者
+
+- **GitHub**：[Nolibity](https://github.com/Nolibity)
+- **邮箱**：3622776232@qq.com
+- **B站**：[铹先生](https://space.bilibili.com)
